@@ -1,0 +1,991 @@
+---
+title: "Ocena ryzyka kredytowego klientów bankowych na podstawie historii kredytowej oraz cech demograficznych."
+author: ""
+date: "2025-06-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r, echo=FALSE}
+library(dplyr)
+library(kableExtra)
+library(mice)
+library(ggplot2)
+library(gridExtra)
+library(corrplot)
+
+#do modeli
+library(e1071)
+library(randomForest)
+library(naivebayes)
+library(xgboost)
+library(caret)
+library(tidymodels)
+library(themis)
+```
+
+# Credit Risk Dataset - Zbiór danych dotyczący ryzyka kredytowego
+
+## Wstęp
+
+Ocena ryzyka kredytowego stanowi jedno z kluczowych wyzwań współczesnej bankowości. Każda decyzja o udzieleniu kredytu wiąże się z ryzykiem, że klient nie spłaci zobowiązania w terminie lub wcale. Aby minimalizować straty finansowe i jednocześnie umożliwiać dostęp do finansowania jak najszerszemu gronu klientów, banki muszą opierać swoje decyzje na wiarygodnych modelach prognostycznych, które uwzględniają zarówno dane demograficzne, jak i finansową historię klienta.
+
+Celem niniejszego projektu jest zbudowanie i analiza modelu predykcyjnego, który pozwoli na ocenę ryzyka kredytowego klientów na podstawie dostępnych danych dotyczących ich cech społeczno-ekonomicznych oraz historii kredytowej. Model taki może zostać wykorzystany jako wsparcie w procesie decyzyjnym instytucji finansowych przy przyznawaniu kredytów.
+
+W projekcie wykorzystano ogólnodostępny zbiór danych „Credit Risk Dataset” udostępniony na platformie Kaggle. Dane te zawierają ponad 32 tysiące obserwacji dotyczących klientów aplikujących o kredyt, wraz z informacją o jego statusie (spłacony lub niespłacony). Uwzględnione zmienne obejmują m.in. wiek, dochód, długość zatrudnienia, status mieszkaniowy, cel kredytu, ocenę kredytową oraz historię niewypłacalności.
+
+Przed przystąpieniem do modelowania przeprowadzono gruntowną analizę eksploracyjną danych, oczyszczenie zbioru z wartości odstających oraz imputację brakujących danych. Następnie wykorzystano metody statystyczne i uczenia maszynowego do identyfikacji czynników najlepiej prognozujących niewypłacalność kredytową oraz do oceny skuteczności modelu predykcyjnego.
+
+W niniejszym opracowaniu przedstawione zostaną: charakterystyka danych, analiza istotnych zmiennych, proces przetwarzania danych, budowa i ocena modeli klasyfikacyjnych oraz interpretacja uzyskanych wyników.
+
+## Opis zbioru danych
+
+Zbiór danych zawiera symulujące obserwacje biura kredytowego i znajduje się na stronie [Kaggle](https://www.kaggle.com/datasets/laotse/credit-risk-dataset/data). Jego autor niestety nie jest znany. Zbiór został udostępniony przez użytkownika pod nazwą *Lao Tse*.
+
+Zbiór zawiera 12 zmiennych, opisujących klientów pewnej instytucji bankowej opisanych poniżej oraz 32 581 obserwacji.
+
+-   `person_age` - wiek osoby ubiegającej się o kredyt
+
+-   `peron_income` - roczny dochód osoby aplikującej o kredyt
+
+-   `person_home_ownership` - status własności domu osoby
+
+    -   `RENT` - wynajem
+
+    -   `OWN` - posiadana na własność
+
+    -   `MORTGAGE` - hipoteka
+
+    -   `OTHER` - inne
+
+-   `person_emp_length` - długość zatrudnienia (w latach)
+
+-   `loan_intent` - cel zaciągnięcia kredytu
+
+    -   `PERSONAL` - prywatne pobudki
+
+    -   `EDUCATION` - edukacja
+
+    -   `MEDICAL` - sprawy medyczne
+
+    -   `VENTURE` - inwestycja
+
+    -   `HOMEIMPROVEMENT` - ulepszenie domu
+
+    -   `DEBTCONSOLIDATION` - konsolidacja zadłużenia
+
+-   `loan_grade` - ocena kredytowa przypisana przez instytucję bankową (A-G)
+
+-   `loan_amnt` - kwota kredytu, o którą aplikuje osoba
+
+-   `loan_int_rate` - stopa procentowa kredytu
+
+-   `loan_status` - status kredytu
+
+    -   `0` - brak niewypłacalności
+
+    -   `1` - niewypłacalność
+
+-   `loan_percent_income` - procent dochodu przeznaczonego na spłatę kredytu
+
+-   `cb_person_default_on_file` - historia niewypłacalności
+
+    -   `Y` - tak
+
+    -   `N` - nie
+
+-   `cb_person_cred_hist_length` - długość historii kredytowej w latach
+
+```{r, echo=FALSE}
+data <- read.csv("credit_risk_dataset.csv")
+head(data,10) %>% 
+  kable(col.names = c("Wiek", "Dochód", "Nieruchomość", "Zatrudnienie", "Cel", "Ocena", "Kwota", "Stopa procentowa", "Status", "Procent dochodu", "Niewypłacalność", "Historia kredytowa")) %>% 
+  kable_styling(bootstrap_options = c("hover", "responsive"), full_width = TRUE)
+```
+
+<p style="text-align:center; font-style:italic;">
+
+Tabela 1: Przykładowe dane dotyczące ryzyka kredytowego.
+
+</p>
+
+### Braki danych
+
+Zbiór danych nie jest kompletny. W poniższej tabeli znajduje się wykaz liczby wartości brakujących w poszczególnych kolumnach oraz ich część procentowa w stosunku do wszystkich danych. Nie jest ich wiele: obserwacje niekompletne stanowią 12% wszystkich danych.
+
+```{r, echo=FALSE}
+cbind(colSums(is.na(data))[colSums(is.na(data)) > 0],
+      round(colSums(is.na(data))[colSums(is.na(data)) > 0]/nrow(data) *100, 2)) %>% kable(col.names = c("Zmienna", "Liczba braków", "Procent wszystkich obserwacji")) %>%    kable_styling(bootstrap_options = c("hover", "condensed","responsive"), full_width = FALSE)
+
+cbind(length(rowSums(is.na(data))[rowSums(is.na(data))>0]),
+      round(length(rowSums(is.na(data))[rowSums(is.na(data))>0])/nrow(data) *100,2)) %>%    kable(col.names = c("Liczba wierszy niekompletnych", "Procent wierszy niekompletnych")) %>%    kable_styling(bootstrap_options = c("hover", "condensed","responsive"), full_width = FALSE)
+```
+
+<p style="text-align:center; font-style:italic;">
+
+Tabela 2: Liczba braków danych.
+
+</p>
+
+### Opis zmiennych
+
+```{r, echo=FALSE}
+#Funckja na podstawowe statystyki
+stat <- function(data, zmienna) {
+  zmienna_sym <- rlang::sym(zmienna)
+
+  if (is.numeric(data[[zmienna]])) {
+    summary_df <- data %>%
+      summarise(
+        Min = min(!!zmienna_sym, na.rm = TRUE),
+        Max = max(!!zmienna_sym, na.rm = TRUE),
+        Średnia = mean(!!zmienna_sym, na.rm = TRUE),
+        Mediana = median(!!zmienna_sym, na.rm = TRUE),
+        Q1 = quantile(!!zmienna_sym, 0.25, na.rm=TRUE),
+        Q3 = quantile(!!zmienna_sym, 0.75, na.rm=TRUE),
+        SD = sd(!!zmienna_sym, na.rm = TRUE),
+        Braki = sum(is.na(!!zmienna_sym)),
+        Obserwacje = n()
+      )
+
+    summary_df %>%
+      kable(caption = paste("Podstawowe statystyki dla:", zmienna), digits = 2) %>%
+      kable_styling(full_width = FALSE)
+
+  } else {
+    freq_table <- data %>%
+      count(!!zmienna_sym) %>%
+      mutate(
+        Procent = round(n / sum(n) * 100, 2)
+      ) %>%
+      rename(Wartość = !!zmienna_sym, Liczność = n)
+
+    freq_table %>%
+      kable(caption = paste("Liczność dla:", zmienna), digits = 2) %>%
+      kable_styling(full_width = FALSE)
+  }
+}
+```
+
+#### - person_age
+
+Poniżej przedstawione są główne statystyki zmiennej wyrażającej wiek klienta pewnej instytucji bankowej. Maksymalna wartość tej zmiennej może sugerować, że w zbiorze danych znajdują się wartości odstające. Zdecydowana większość klientów to były osoby młode, do 30 roku życia.
+
+```{r, echo=FALSE}
+stat(data, "person_age")
+```
+
+Poniższy histogram oraz wykres ramka wąsy przedstawiają rozkład zmiennej `person_age`. Rozkład jest prawostronnie asymetryczny a wartości tej zmiennej skupiają się wokół 20-30 lat.
+
+```{r, fig.width=12, fig.height=6, echo=FALSE}
+p1 <- ggplot(data, aes(x = person_age)) +
+  geom_histogram(fill = "#e4a2f5") +
+  labs(title = "Histogram wieku", y="Liczność", x="Wiek") +
+  theme_minimal()
+
+p2 <- ggplot(data, aes(x = person_age)) +
+  geom_boxplot(fill = "#e4a2f5") +
+  labs(title = "Wykres ramka-wąsy wieku", x = "Wiek") +
+  theme_minimal()
+
+p3 <- ggplot(data, aes(x = log(person_age))) +
+  geom_histogram(fill = "#a2dff5") +
+  labs(title = "Histogram zlogarytmowanego wieku", x="log(wiek)", y="Liczność") +
+  theme_minimal()
+
+p4 <- ggplot(data, aes(x = log(person_age))) +
+  geom_boxplot(fill = "#a2dff5") +
+  labs(title = "Wykres ramka-wąsy zlogarytmowanego wieku", x = "log(wiek)") +
+  theme_minimal()
+
+grid.arrange(p1, p2, p3, p4, ncol = 2)
+```
+
+Poniżej znajduje się tabela zawierająca informacje na temat klientów, których wiek przekracza 100 lat i które można uznać za wartości odstające
+
+```{r, echo=FALSE}
+data[data$person_age>100,] %>% kable() %>%  kable_styling(bootstrap_options = c("hover", "condensed","responsive"), full_width = FALSE)
+```
+
+<p style="text-align:center; font-style:italic;">
+
+Tabela 3: Klienci, których wiek przekracza 100 lat.
+
+</p>
+
+#### - person_income
+
+Jest to zmienna informująca o rocznym dochodzie osoby ubiegającjej się o kredyt. Minimalna kwota wynosi 4 000 dolarów, natomiast maksymalna - 6 000 000. Może to sugerować potencjalne wartości odstające. Większość badanych osób zarabia mniej rocznie niż średnia próby (mediana \< średnia). Odchylenie standardowe sugeruje dużą rozpiętność dochodów.
+
+```{r, echo=FALSE}
+stat(data, "person_income")
+```
+
+Poniższe wykresy sugerują prawostronną asymetryczność, można zaobserwować wartości odstające. Po zlogarytmowaniu zmiennej rozkład przybiera kształt normalnego.
+
+```{r, fig,width=12, fig.height=6, echo=FALSE}
+p1 <- ggplot(data, aes(x = person_income)) +
+  geom_histogram(fill = "#e4a2f5") +
+  labs(title = "Histogram rocznego dochodu", y="Liczność", x="Dochód") +
+  theme_minimal()
+
+p2 <- ggplot(data, aes(x = person_income)) +
+  geom_boxplot(fill = "#e4a2f5") +
+  labs(title = "Wykres ramka-wąsy rocznego dochodu", x = "Dochód") +
+  theme_minimal()
+
+p3 <- ggplot(data, aes(x = log(person_income))) +
+  geom_histogram(fill = "#a2dff5") +
+  labs(title = "Histogram zlogarytmowanego rocznego dochodu", x="log(dochód)", y="Liczność") +
+  theme_minimal()
+
+p4 <- ggplot(data, aes(x = log(person_income))) +
+  geom_boxplot(fill = "#a2dff5") +
+  labs(title = "Wykres ramka-wąsy zlogarytmowanego dochodu", x = "log(dochód)") +
+  theme_minimal()
+
+grid.arrange(p1, p2, p3, p4, ncol = 2)
+```
+
+Poniższa tabela przedstawia wiersze, dla których dochód roczny przekroczył 1 000 000 dolarów. Obserwację, w której wartość tej zmiennej jest równa 6 000 000 można uznać za błędną, ze względu na wiek kredytobiorcy.
+
+```{r, echo=FALSE}
+data[data$person_income>1000000,] %>% kable() %>%  kable_styling(bootstrap_options = c("hover", "condensed","responsive"), full_width = FALSE)
+```
+
+<p style="text-align:center; font-style:italic;">
+
+Tabela 4: Klienci z dochodem rocznym przekraczającym 1 mln USD.
+
+</p>
+
+### - person_home_ownership
+
+Jest to zmienna opisująca status własności domu i przybiera następujące wartości:
+
+-   `RENT` - wynajem
+
+-   `OWN` - posiadanie na własność
+
+-   `MORTGAGE` - hipoteka
+
+-   `OTHER` - inne
+
+    Najczęstszą wartością tej zmiennej jest wartość `RENT` (wynajem) i stanowi ona około 50% całej próby.
+
+```{r, echo=FALSE}
+data$person_home_ownership <- factor(
+  data$person_home_ownership, levels=c("RENT", "OWN", "MORTGAGE", "OTHER"), labels=c("RENT", "OWN", "MORTGAGE", "OTHER"))
+stat(data, "person_home_ownership")
+
+```
+
+Poniższe wykresy ramka-wąsy przedstawiają rozkład zlogarytmowanego dochodu oraz wieku w podziale na status posiadania domu.
+
+Zlogarytmowanie zmiennej zmniejszyło wpływ ekstremalnie wysokich dochodów, co pozwala lepiej zaobserwować strukturę rozkładu. Mediana w grupie osób z hipoteką (`MORTGAGE`) jest największa, co sugeruje, że osoby te osiągają wyższe dochody. W każdej grupie występują wartości odstające, co oznacza obecność osób z dochodami znacznie odbiegającymi od normy.
+
+Rozkład wieku badanych osób nie różni się znacząco między sobą. Najwięcej wartości odstających jest w grupie hipotecznej (`MORGTAGE`) oraz wynajmu (`RENT`).
+
+```{r, fig.width=12, fig.height=6, echo=FALSE}
+p1 <- ggplot(data, aes(x = log(person_income), y = person_home_ownership, fill = person_home_ownership)) +
+  geom_boxplot() +
+  labs(
+    title = "Wykresy ramka-wąsy statusu własności domu w zależności od zlogarytmowanego dochodu oraz wieku",
+    x = "log(dochód)",
+    y = "Status Własności Domu"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+p2 <- ggplot(data, aes(x = person_age, y = person_home_ownership, fill = person_home_ownership)) +
+  geom_boxplot() +
+  labs(
+    title = "",
+    x = "Wiek",
+    y = "")+
+  theme_minimal() +
+  theme(legend.position = "none")
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+#### - person_emp_length
+
+Jest to zmienna opisująca długość zatrudnienia w latach. Maksimum zmiennej może wskazywać ponownie na wartości odstające, zdecydowana większość próby przepracowała 7 lat. Zmienna zawiera braki i stanowią one mniej niż 3% całego zbioru.
+
+```{r, echo=FALSE}
+stat(data, "person_emp_length")
+```
+
+Poniższe wykresy przestawiają rozkład zmiennej opisującej długość zatrudnienia. Zmienna posiada skrajne wartości odstające.
+
+```{r, echo=FALSE, fig.height=6, fig.width=12}
+p1 <- ggplot(data, aes(x = person_emp_length)) +
+  geom_histogram(fill = "#e4a2f5") +
+  labs(title = "Histogram długości zatrudnienia", x="Długość zatrudnienia", y="Liczność") +
+  theme_minimal()
+
+p2 <- ggplot(data, aes(x = person_emp_length)) +
+  geom_boxplot(fill = "#e4a2f5") +
+  labs(title = "Wykres ramka-wąsy długości zatrudnienia", x = "Długość zatrudnienia") +
+  theme_minimal()
+
+p3 <- ggplot(data, aes(x = log(person_emp_length))) +
+  geom_histogram(fill = "#a2dff5") +
+  labs(title = "Histogram zlogarytmowanej długości zatrudnienia", x="log(zatrudnienie)", y="Liczność") +
+  theme_minimal()
+
+p4 <- ggplot(data, aes(x = log(person_emp_length))) +
+  geom_boxplot(fill = "#a2dff5") +
+  labs(title = "Wykres ramka-wąsy zlogarytmowanej długości zatrudnienia", x = "log(zatrudnienie)") +
+  theme_minimal()
+
+grid.arrange(p1, p2, p3, p4, ncol = 2)
+```
+
+Poniższa tabela przedstawia wartości zmiennej `person_emp_length`, które przekraczają 100 lat. Owe obserwacje są błędnę, ze względu, że długość zatrudnienia osoby przekracza jej wiek (`person_emp_length` \> `person_age`).
+
+```{r, echo=FALSE}
+#kod do wyświetlania jest inny, bo zmienna zawiera wartości NA i przy warunku zwraca też zwraca wiersze z NA
+data[which(data$person_emp_length > 100), ] %>% kable() %>%  kable_styling(bootstrap_options = c("hover", "condensed","responsive"), full_width = FALSE) 
+```
+
+<p style="text-align:center; font-style:italic;">
+
+Tabela 5: Błędne obserwacje ze względu na nieprawidłowy okres długości zatrudnienia.
+
+</p>
+
+#### - loan_intent
+
+Zmienna ta opisuje cel zaciągnięcia kredytu przez kredytobiorcę. Przyjmuje ona wartości:
+
+-   `PERSONAL` - prywatne pobudki
+
+-   `EDUCATION` - edukacja
+
+-   `MEDICAL` - sprawy medyczne
+
+-   `VENTURE` - inwestycja
+
+-   `HOMEIMPROVEMENT` - ulepszenie domu
+
+-   `DEBTCONSOLIDATION` - konsolidacja zadłużenia
+
+    Wartości zmiennej nie różnią się znacząco liczbowo między sobą (nie ma takiej, która przewyższyła by znacząco inne) co wskazuje na to, że zmienna jest zbalansowana. Najwięcej osób zaciąga kredyty przez edukacje, natomiast najmniej - aby dokonać pewnego rodzaju remontów w domu.
+
+```{r, echo=FALSE}
+data$loan_intent <- factor(
+  data$loan_intent, levels=c("PERSONAL", "EDUCATION", "MEDICAL", "VENTURE", "HOMEIMPROVEMENT", "DEBTCONSOLIDATION"), labels=c("PERSONAL", "EDUCATION", "MEDICAL", "VENTURE", "HOMEIMPROVEMENT", "DEBTCONSOLIDATION"))
+stat(data, "loan_intent")
+```
+
+Poniższe wykresy ramka-wąsy przedstawiają rozkład zlogarytmowanego dochodu oraz wieku w podziale na cel zaciągnięcia kredytu. Rozkłady zmiennych nie różnią się znacząco do siebie. Posiadają wiele wartości odstających, a największe z nich znajdują się w obserwacjach dotyczących pewnego rodzaju inwestycji (`VENTURE`), edukacji (`EDUCATION`) oraz prywatnych pobudek (`PERSONAL`).
+
+```{r, echo=FALSE, fig.height=6, fig.width=12}
+p1 <- ggplot(data, aes(x = log(person_income), y = loan_intent, fill = loan_intent)) +
+  geom_boxplot() +
+  labs(
+    title = "Wykresy ramka-wąsy celu zaciągnięcia kredytu w zależności od zlogarytmowanego dochodu oraz wieku",
+    x = "log(dochód)",
+    y = "Cel zaciągnięcia kredytu"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+p2 <- ggplot(data, aes(x = person_age, y = loan_intent, fill = loan_intent)) +
+  geom_boxplot() +
+  labs(
+    title = "",
+    x = "Wiek",
+    y = "")+
+  theme_minimal() +
+  theme(legend.position = "none")
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+#### - loan_grade
+
+Zmienna zawiera ocenę kredytową przypisaną przez instytucję bankową. Ocena ta wskazuje na poziom ryzyka związanego z udzieleniem kredytu danej osobie. Jej wartości opisane są literami `A`-`G`. `A` oznacza, że ryzyko jest niskie, czyli klient jest wiarygodny i prawdopodobieństwo bezproblemowego spłacenia przez niego kredytu jest wysokie, natomiast `G` odwrotnie. Ich liczność zmniejsza się alfabetycznie (`A` jest najczęstsze, `G` - najbardziej rzadkie). Co potwierdza, że banki zdecydowanie częściej udzielają pożyczek osobom wiarygodnym z niskim ryzykiem związanym z udzieleniem kredytu.
+
+```{r, echo=FALSE}
+data$loan_grade <- factor(
+  data$loan_grade, levels=c("A", "B", "C", "D", "E", "F", "G"), labels=c("A", "B", "C", "D", "E", "F", "G"))
+stat(data, "loan_grade")
+```
+
+Poniższe wykresy przestawiają liczności celów do zaciągnięcia kredytu oraz zlogarytmowanego dochodu w zależności od oceny kredytowej.
+
+W niemalże każdej z grup cel zaciągnięcia kredytu to edukacja (`EDUCATION`). Najmniejszą liczność ma ocena `G` kredytu. Najwięcej wartości odstających ma ocena `C` oraz `A` kredytu, natomiast `G` nie posiada żadnej.
+
+```{r, echo=FALSE, fig.height=6, fig.width=12}
+p1 <- ggplot(data, aes(y = loan_grade, fill = loan_intent)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Liczność oceny kredytowej wzgledem celu",
+       y = "Ocena kredytowa", x = "Liczba") +
+  theme_minimal()
+
+p2 <- ggplot(data, aes(y = loan_grade, x = log(person_income), fill = loan_grade)) +
+  geom_boxplot() +
+  labs(title = "Logarytm dochód w zależności od Oceny", x = "log(dochód)", y="") +
+  theme_minimal()
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+#### - loan_amnt
+
+Zmienna ta mówi o wysokość kredytu, który zaciągnęła dana osoba. Minimalny kredyt wynosi 500 dolarów, natomiast maksymalny 35 000 dolarów. Zmienna nie posiada braków danych.
+
+```{r, echo=FALSE}
+stat(data, "loan_amnt")
+```
+
+Poniższe wykresy przedstawiają rozkład wysokości kredytu. Zmienna nie posiada wartości odstających, które zaburzałyby strukturę danych.
+
+```{r, fig.height=6, fig.width=12, echo=FALSE}
+p1 <- ggplot(data, aes(x = loan_amnt)) +
+  geom_histogram(fill = "#e4a2f5") +
+  labs(title = "Histogram wysokość kredytu", x="Wysokość kredytu", y="Liczność") +
+  theme_minimal()
+
+p2 <- ggplot(data, aes(x = loan_amnt)) +
+  geom_boxplot(fill = "#e4a2f5") +
+  labs(title = "Wykres ramka-wąsy wysokości kredytu", x = "Wysokość kredytu") +
+  theme_minimal()
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+#### - loan_int_rate
+
+Zmienna mówi o stopie procentowej kredytu. Maksymalna wartość stopy procentowej wynosi 23.22. 75% próby miało stopę niewiększą niż 13.47%. Zmienna zawiera braki i stanowią one mniej niż 10% całej próby.
+
+```{r, echo=FALSE}
+stat(data, "loan_int_rate")
+```
+
+Poniższe wykresy pokazują rozkład zmiennej odpowiadającej za stopę procentową kredytu. Zmienna ma kilka wartości odstających w okolicach 22%.
+
+```{r, fig.height=6, fig.width=12, echo=FALSE}
+p1 <- ggplot(data, aes(x = loan_int_rate)) +
+  geom_histogram(fill = "#e4a2f5") +
+  labs(title = "Histogram stopy procentowej", x="Stopa procentowa", y="Liczność") +
+  theme_minimal()
+
+p2 <- ggplot(data, aes(x = loan_int_rate)) +
+  geom_boxplot(fill = "#e4a2f5") +
+  labs(title = "Wykres ramka-wąsy stopy procentowej", x = "Stopa procentowa") +
+  theme_minimal()
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+#### - loan_status - zmienna niezależna
+
+Zmienna `loan_status` informuje o statusie spłaty kredytu, gdzie:
+
+-   `0` oznacza brak niewypłacalności (kredyt spłacony prawidłowo),
+
+-   `1` oznacza niewypłacalność (problemy ze spłatą, np. zaległości, windykacja).
+
+W analizowanym zbiorze danych 78,18% przypadków (25 473 obserwacje) stanowią kredyty spłacone bez problemów, a 21,82% przypadków (7 108 obserwacji) to kredyty niespłacone lub z oznakami niewypłacalności.
+
+```{r, echo=FALSE}
+data$loan_status <- factor(data$loan_status, levels=c(0,1), labels=c(0,1))
+stat(data, "loan_status")
+```
+
+Na podstawie poniższych wykresów można zaobserwować, że dochód silnie różnicuje status wypłacalności- im niższy, tym ryzyko niewypłacalności jest większe. Rozkład dochodów dla klietów niewypłacalnych jest nieco bardziej zróżnicowany niż dla klientów wypłacalnych.
+
+Osoby niewypłacalne mają deikatnie niższy wiek co sugerowałoby, że osoby młodsze mają częściej problemy ze spłatą.
+
+```{r, fig.height=6, fig.width=12, echo=FALSE}
+p1 <- ggplot(data, aes(x = log(person_income), y = loan_status, fill = loan_status)) +
+  geom_boxplot() +
+  labs(
+    title = "Wykresy ramka-wąsy niewypłacalności w zależności od zlogarytmowanego dochodu oraz wieku",
+    x = "log(dochód)",
+    y = "Status wypłacalności"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+p2 <- ggplot(data, aes(x = person_age, y = loan_status, fill = loan_status)) +
+  geom_boxplot() +
+  labs(
+    title = "",
+    x = "Wiek",
+    y = "")+
+  theme_minimal() +
+  theme(legend.position = "none")
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+#### - loan_percent_income
+
+Jest to zmienna informująca o procencie swojego dochodu jaki klient przeznacza na spłatę zaciągniętego kredytu. Na podstawie poniższych statystyk można zaobserwować, że połowa klientów przeznacza 15% lub mniej dochodu na ratę. Zdecydowana większość przeznacza rozsądny procent dochodu na kredyt - poniżej 25%.
+
+```{r, echo=FALSE}
+stat(data, "loan_percent_income")
+```
+
+Na podstawie histogramu - rozkład jest asymetryczny (prawoskośny) – większość osób przeznacza stosunkowo niewielki procent dochodu na spłatę kredytu. Najwięcej obserwacji koncentruje się w zakresie 0.1–0.2 (10–20%). Są pojedyncze przypadki, gdzie udział przekracza 0.4 (czyli ponad 40% dochodu idzie na ratę).
+
+To co widoczne jest na boxplocie to między innymi dużo outlierów powyżej Q3 - osoby te przeznaczają nietypowo wysoki procent dochodu na spłatę kredytu (nawet do 83%).
+
+```{r, echo=FALSE, fig.height=6, fig.width=12}
+p1 <- ggplot(data, aes(x = loan_percent_income)) +
+  geom_histogram(fill = "#e4a2f5") +
+  labs(title = "Histogram procentu dochodu przeznaczonego na spłatę", x="Procent dochodu", y="Liczność") +
+  theme_minimal()
+
+p2 <- ggplot(data, aes(x = loan_percent_income)) +
+  geom_boxplot(fill = "#e4a2f5") +
+  labs(title = "Wykres ramka-wąsy procentu dochodu", x = "PRocent dochodu") +
+  theme_minimal()
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+#### cb_person_default_on_file
+
+Zmienna informująca o historii niewypłacalności:
+
+-   `Y` - tak
+
+-   `N` - nie
+
+Ponad 82% klientów z danego zbioru było wypłacalnych.
+
+```{r, echo=FALSE}
+data$cb_person_default_on_file <- factor(data$cb_person_default_on_file, labels=c("Y","N"), levels = c("Y", "N"))
+stat(data, "cb_person_default_on_file")
+```
+
+Klienci bez historii niewypłacalności (N) mają nieco wyższy dochód (wyższa mediana oraz przesunięty rozkład ku wyższym wartościom) w porównaniu do klientów z historią niewypłacalności (Y).
+
+Może to sugerować, że niższy dochód wiąże się z większym ryzykiem niewypłacalności.
+
+Mediany wieku dla obu grup (Y i N) są do siebie zbliżone, ale:
+
+Rozrzut wieku w grupie N (brak niewypłacalności) jest nieco większy – pojawiają się klienci bardzo młodzi i bardzo starsi.
+
+W grupie Y (z historią niewypłacalności) dominują osoby w średnim wieku.
+
+Można przypuszczać, że wiek ma umiarkowany wpływ na historię kredytową, ale zależność ta nie jest tak silna jak w przypadku dochodu.
+
+Dochód wydaje się być lepszym predyktorem historii niewypłacalności niż wiek.
+
+Klienci z historią niewypłacalności mają niższe dochody i są w nieco węższym zakresie wiekowym niż ci bez niej.
+
+```{r, fig.height=6, fig.width=12, echo=FALSE}
+p1 <- ggplot(data, aes(x = log(person_income), y = cb_person_default_on_file, fill = cb_person_default_on_file)) +
+  geom_boxplot() +
+  labs(
+    title = "Wykresy ramka-wąsy historii niewypłacalności w zależności od zlogarytmowanego dochodu oraz wieku",
+    x = "log(dochód)",
+    y = "Status niewypłacalności"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+p2 <- ggplot(data, aes(x = person_age, y = cb_person_default_on_file, fill = cb_person_default_on_file)) +
+  geom_boxplot() +
+  labs(
+    title = "",
+    x = "Wiek",
+    y = "")+
+  theme_minimal() +
+  theme(legend.position = "none")
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+#### cb_person_cred_hist_length
+
+Zmienna informuje o długości historii kredytowej w latach. Większość klientów ma relatywnie krótką historię kredytową. Mediana (4 lata) i średnia (5,8 roku) są dość niskie, co może wskazywać, że mamy do czynienia głównie z osobami relatywnie nowymi w systemie kredytowym. Dane o długości historii kredytowej są pełne (brak braków danych).
+
+```{r, echo=FALSE}
+stat(data, "cb_person_cred_hist_length")
+```
+
+Histogram ukazuje bardzo asymetryczny rozkład — zdecydowana większość obserwacji skupia się w zakresie 2–6 lat. Jest wyraźna przewaga klientów z bardzo krótką historią kredytową. Większość klientów nie ma długiego doświadczenia kredytowego, co może wpływać na ocenę ryzyka kredytowego – krótsza historia zwykle wiąże się z większą niepewnością dla instytucji finansowych.
+
+Wykres ramka-wąsy potwierdza dużą asymetrię rozkładu – „wąsy” kończą się przy niskich wartościach, a dalsze punkty tworzą długi ogon po prawej stronie (obserwacje odstające).
+
+Występuje obecność wielu outlierów (wartości powyżej 15 lat), które są relatywnie nieliczne, ale mogą być istotne w analizie.
+
+Zmienna ma silnie prawostronnie skośny rozkład, a obserwacje powyżej 15 lat należy traktować jako potencjalne obserwacje odstające, choć mogą one również reprezentować bardzo rzetelnych klientów z długą historią.
+
+```{r, fig.width=12, fig.height=6, echo=FALSE}
+p1 <- ggplot(data, aes(x = cb_person_cred_hist_length)) +
+  geom_histogram(fill = "#e4a2f5") +
+  labs(title = "Histogram procentu długości historii kredytowej", x="Długość historii", y="Liczność") +
+  theme_minimal()
+
+p2 <- ggplot(data, aes(x = cb_person_cred_hist_length)) +
+  geom_boxplot(fill = "#e4a2f5") +
+  labs(title = "Wykres ramka-wąsy długości historii kredytowej", x = "Długość historii") +
+  theme_minimal()
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+## Oczyszczanie zbioru danych
+
+### Usuwanie wartości odstających
+
+Wartości odstające uznałyśmy za obserwacje, w których wiek kredytobiorców oraz długość zatrudnienia przekraczała 100 lat - było ich 7. Utworzyłyśmy nową ramkę danych o nazwie `kredyt` , pod którą zapisałyśmy oczyszczony zbiór.
+
+```{r, echo=FALSE}
+kredyt <- data
+kredyt <- subset(kredyt, (person_age <= 100 | is.na(person_age)) & (person_emp_length <= 100 | is.na(person_emp_length)))
+```
+
+### Imputacja
+
+Porównałyśmy trzy sposoby imputacji:
+
+-   `pmm` (Predictive Mean Matching) - uzupełnia brakujące wartości, wybierając rzeczywiste obserwacje z istniejących danych. Dla każdej brakującej wartości dopasowuje model regresyjny, a następnie szuka obserwacji z podobną przewidywaną wartością i losowo wybiera jedną z nich jako imputację. Jest odporna na ekstremalne wartości i dobrze zachowuje oryginalny rozkład zmiennej.
+
+-   `rf` (Random Forest) - wykorzystuje algorytm lasów losowych do przewidywania brakujacych wartości. Dla każdej zmiennej z brakami trenowany jest model na podstawie pozostałych cech. Imputacje mogą być zbyt wygłądzone i syntetyczne, co prowadzi do zniekształcania danych.
+
+-   `cart` (Classification and Regression Trees) - metoda oparta na drzewach decyzyjnych. Dla każdej brakującej wartości budowane jest drzewo regresyjne (klasyfikacyjne), która na podstawie pozostałych cech przewiduje brakującą wartość. Dobrze radzi sobie z wartośćiami odstającymi ale może prowadzić do niedoszacowania zmienności imputowanych danych.
+
+```{r, fig.width=12, fig.height=6}
+set.seed(2025)
+
+methods <- make.method(kredyt)
+
+methods["person_emp_length"] <- "rf"
+methods["loan_int_rate"] <- "rf" 
+
+imputacja <- mice(kredyt, m=5, method=methods, printFlag=FALSE)
+
+methods["person_emp_length"] <- "pmm"
+methods["loan_int_rate"] <- "pmm" 
+imputacja2 <- mice(kredyt, m=5, method=methods, printFlag=FALSE)
+
+methods["person_emp_length"] <- "cart"
+methods["loan_int_rate"] <- "cart" 
+imputacja3 <- mice(kredyt, m=5, method=methods, printFlag=FALSE)
+
+densityplot(imputacja2, main="Predictive Mean Matching")
+densityplot(imputacja, main="Random Forest")
+densityplot(imputacja3, main="Classification and Regression Trees")
+```
+
+Najlepszym sposobem imputacji wydał nam się `pmm` ze względu na to, że nie wygładza danych w porónaniu do innych badanych metod i zachowuje lepiej oryginalny rozkład. Dodatkowo uzupełnia brakujące wartości danymi rzeczywistymi z ramki, a nie syntetycznymi prognozami. Aby wybrać odpowiedni imputowany zbiór zbadałyśmy stabilność modelu `glm` na pięciu imputowanych zbiorach . Najlepiej wypadła w tym przypadku imputacja pierwsza.
+
+```{r, echo=FALSE}
+set.seed(2025)
+
+datasets <- list(complete(imputacja2, 1), complete(imputacja2, 2), complete(imputacja2, 3), complete(imputacja2, 4), complete(imputacja2, 5))
+results <- list()
+
+for (i in 1:5) {
+  data <- datasets[[i]]
+  trainIndex <- createDataPartition(data$loan_status, p = 0.7, list = FALSE)
+  train <- data[trainIndex, ]
+  test <- data[-trainIndex, ]
+
+  model <- glm(loan_status ~ ., data = train, family = "binomial")
+  pred <- predict(model, newdata = test, type = "response")
+  auc <- pROC::auc(pROC::roc(test$loan_status, pred))
+  
+  results[[i]] <- auc
+}
+
+print(results)
+kredyt <- complete(imputacja2, 1)
+```
+
+### Analiza korelacji
+
+Po przeanalizowaniu korelacji między zmiennymi okazało się, że między zmienną `person_age` oraz `cb_person_cred_hist_length` występuje silna korelacja (0.88). Na tej podstawie zdecydowałyśmy się usunąć zmienną odpowiadającą długości historii kredytowej (`cb_person_cred_hist_length)`.
+
+```{r, echo=FALSE}
+numeric_data <- kredyt[, sapply(kredyt, is.numeric)]
+cor_matrix <- cor(numeric_data, use = "complete.obs")
+
+corrplot(cor_matrix, method = "color", type = "upper", 
+         tl.col = "black", tl.srt = 45, addCoef.col = "black", number.cex = 0.7)
+```
+
+```{r, echo=FALSE}
+kredyt$cb_person_cred_hist_length <- NULL
+```
+
+## Budowa modeli
+
+### Podział na zbiór treningowy i testowy
+
+Podzieliłyśmy dane względem zmiennej `loan_status` w proprcji 80:20, co oznacza, że 80% danych trafia do zbioru treningowego, a 20% do testowego.
+
+```{r}
+trainIndex <- createDataPartition(kredyt$loan_status, p = 0.8, list = FALSE)
+train <- kredyt[trainIndex, ]
+test  <- kredyt[-trainIndex, ]
+```
+
+### Skalowanie 
+
+SVM jest wrażliwe na skalę danych, dlatego dane są centrowane (średnia = 0) i skalowane (SD = 1).
+
+```{r}
+preproc <- preProcess(train, method = c("center", "scale"))
+train_scaled <- predict(preproc, train)
+test_scaled  <- predict(preproc, test)
+```
+
+### Trening modeli
+
+```{r, echo=FALSE}
+library(doParallel)
+
+cl <- makePSOCKcluster(8)
+registerDoParallel(cl)
+
+```
+
+Poniżej wprowadziłyśmy następujące modele:
+
+-   GLM (Regresja logistyczna) – model liniowy używany do klasyfikacji binarnej. family = "binomial" wskazuje na problem 0/1.
+
+-   Random Forest (RF) – model oparty na wielu drzewach decyzyjnych (ensemble). ntree = 200 oznacza, że las składa się z 200 drzew.
+
+-   SVM (Support Vector Machine) – klasyfikator liniowy, wymagający wcześniejszego skalowania danych.
+
+-   Naive Bayes – prosty, probabilistyczny klasyfikator bazujący na założeniu niezależności cech.
+
+-   XGBoost (xgbTree) – zaawansowany model oparty na boosting’u drzew decyzyjnych, znany z wysokiej skuteczności.
+
+```{r}
+model_glm <- train(loan_status ~ ., data = train, method = "glm", family = "binomial")
+model_rf  <- train(loan_status ~ ., data = train, method = "rf", ntree = 200)
+model_svm <- train(loan_status ~ ., data = train_scaled, method = "svmLinear")
+model_nb  <- train(loan_status ~ ., data = train, method = "naive_bayes")
+model_xgb <- train(loan_status ~ ., data = train, method = "xgbTree")
+```
+
+```{r, echo=FALSE}
+stopCluster(cl)
+```
+
+### Ocena modelu
+
+```{r}
+model_list <- list(
+  GLM = model_glm,
+  RF = model_rf,
+  SVM = model_svm,
+  NB = model_nb,
+  XGB = model_xgb
+)
+
+for (model_name in names(model_list)) {
+  
+  pred <- if (model_name == "SVM") {
+    predict(model_list[[model_name]], newdata = test_scaled)
+  } else {
+    predict(model_list[[model_name]], newdata = test)
+  }
+  
+  cm <- confusionMatrix(pred, test$loan_status)
+  
+  acc <- cm$overall['Accuracy']
+  sens <- cm$byClass['Sensitivity']
+  spec <- cm$byClass['Specificity']
+  prec <- cm$byClass['Precision']
+  rec <- cm$byClass['Recall']
+  f1 <- cm$byClass['F1']
+  
+  metrics <- c(
+    Accuracy = acc,
+    Precision = prec,
+    Recall = rec,
+    F1 = f1,
+    Sensitivity = sens,
+    Specificity = spec
+  )
+}
+```
+
+```{r, echo=FALSE}
+wyniki <- data.frame(
+  Model = c("GLM", "Random Forest", "SVM", "Naive Bayes", "XGBoost"),
+  Accuracy = c(0.864, 0.936, 0.862, 0.833, 0.933),
+  Precision = c(0.882, 0.928, 0.881, 0.857, 0.928),
+  Recall = c(0.953, 0.994, 0.953, 0.945, 0.991),
+  F1 = c(0.916, 0.960, 0.915, 0.898, 0.958),
+  Sensitivity = c(0.953, 0.994, 0.953, 0.945, 0.991),
+  Specificity = c(0.545, 0.726, 0.538, 0.433, 0.725)
+)
+
+wyniki %>% 
+  kable(
+    col.names = c("Model", "Accuracy", "Precision", "Recall", "F1", "Sensitivity", "Specificity"),
+    
+    digits = 3,
+    align = "c"
+  ) %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = TRUE) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(1, bold = TRUE)
+```
+
+Random Forest (RF) i XGBoost (XGB) osiągnęły najwyższą skuteczność (Accuracy \> 93%) oraz bardzo wysoką czułość (Recall \> 0.99). Oznacza to, że niemal wszystkie przypadki niewypłacalności zostały poprawnie rozpoznane.
+
+Również F1-score w tych modelach jest najwyższy (\~0.96), co oznacza dobre zrównoważenie precyzji i czułości.
+
+Wybrałyśmy Random Forest i XGBoost to najlepsze modele pod względem wszystkich metryk, zatem wybrałyśmy je do dalszej pracy.
+
+### Obsługa niezrównoważonych klas
+
+Na tym etapie analizy zajęłyśmy się obsługą niezrównoważonych klas.
+
+Początkowo stworzyłyśmy przepis (recipe) dla danych treningowych, który:
+
+-   zamienia zmienne kategoryczne na zmienne binarne (step_dummy)
+
+-   stosuje SMOTE do zmiennej zależnej loan_status, by zrównoważyć klasy – czyli syntetycznie zwiększyć liczbę obserwacji klasy mniejszościowej.
+
+Finalnie sprawdziłyśmy nowy rozkład klas - jest bardziej zrównoważony.
+
+```{r}
+rec <- recipe(loan_status ~ ., data = train) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_smote(loan_status)
+
+prep_rec <- prep(rec)
+train_smote <- bake(prep_rec, new_data = NULL)
+test_smote <- bake(prep_rec, new_data = test)
+
+table(train_smote$loan_status)
+
+```
+
+### Porównanie modeli
+
+W celu przeprowadzenia porównania modeli przed i po użyciu SMOTE, przeprowadziłyśmy trening modeli na danych po SMOTE.
+
+Ustawiłyśmy 5-krotną walidację krzyżową.
+
+```{r, message=FALSE, warning=FALSE, results='hide'}
+ctrl <- trainControl(method = "cv", number = 5, verboseIter = TRUE, allowParallel = FALSE)
+model_rf_smote  <- train(
+  loan_status ~ ., 
+  data = train_smote, 
+  method = "rf", 
+  ntree = 200,
+  trControl = ctrl
+)
+
+model_xgb_smote <- train(
+  loan_status ~ ., 
+  data = train_smote, 
+  method = "xgbTree",
+  trControl = ctrl
+)
+
+```
+
+```{r}
+model_list <- list(
+  RF = model_rf,
+  XGB = model_xgb,
+  RF_smote = model_rf_smote,
+  XGB_smote = model_xgb_smote
+)
+
+for (model_name in names(model_list)) {
+  current_test <- if (grepl("_smote$", model_name)) test_smote else test
+  
+  pred <- predict(model_list[[model_name]], newdata = current_test)
+
+  cm <- confusionMatrix(pred, current_test$loan_status)
+  
+  acc  <- cm$overall['Accuracy']
+  sens <- cm$byClass['Sensitivity']
+  spec <- cm$byClass['Specificity']
+  prec <- cm$byClass['Precision']
+  rec  <- cm$byClass['Recall']
+  f1   <- cm$byClass['F1']
+  
+  metrics <- c(
+    Accuracy = acc,
+    Precision = prec,
+    Recall = rec,
+    F1 = f1,
+    Sensitivity = sens,
+    Specificity = spec
+  )
+}
+```
+
+```{r, echo=FALSE}
+wyniki <- data.frame(
+  Model = c("Random Forest", "SMOTE Random Forest", "XGBoost", "SMOTE XGBoost"),
+  Accuracy = c(0.936, 0.935, 0.933, 0.931),
+  Precision = c(0.929, 0.930, 0.928, 0.928),
+  Recall = c(0.994, 0.992, 0.991, 0.989),
+  F1 = c(0.960, 0.960, 0.958, 0.957),
+  Sensitivity = c(0.994, 0.992, 0.991, 0.989),
+  Specificity = c(0.727, 0.733, 0.725, 0.725)
+)
+
+wyniki %>% 
+  kable(
+    col.names = c("Model", "Accuracy", "Precision", "Recall", "F1", "Sensitivity", "Specificity"),
+    
+    digits = 3,
+    align = "c"
+  ) %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = TRUE) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(1, bold = TRUE)
+```
+
+SMOTE poprawił Specificity (lepiej rozpoznaje klientów bez ryzyka) ale nieznacznie obniża Recall. Ze względu, że celem naszej pracy była maksymalna detekcja ryzykownych klientów (niewypłacalnych) zdecydowałyśmy, że podtawowy Random Forest jest najlepszym z modeli, ponieważ ma najlepsze:
+
+-   Accuracy - 0.936
+
+-   Recall - 0.994
+
+-   F1 - 0.960
+
+-   Sensivity - 0.994
+
+Natomiast pozostałe metryki (Precision-0.929, Specificity - 0.727) nieznacznie są gorsze od Random Forest po zbalansowaniu (Precision - 0.930, Specificity - 0.733).
+
+## Podsumowanie
+
+W ramach przeprowadzonej analizy przygotowałyśmy kompletny proces predykcji niewypłacalności klientów kredytowych, zaczynając od oczyszczenia danych, poprzez imputację braków, analizę korelacji, aż po budowę i ocenę modeli klasyfikacyjnych.
+
+Na etapie **wstępnego przetwarzania danych** usunęłyśmy wartości odstające (np. wiek i długość zatrudnienia powyżej 100 lat) oraz przeprowadziłyśmy porównanie trzech metod imputacji brakujących danych: *Predictive Mean Matching (PMM)*, *Random Forest* oraz *CART*. Najlepsze rezultaty pod względem zachowania rozkładu danych oraz stabilności modelu uzyskała metoda **PMM**, która została wybrana jako główna technika imputacji.
+
+Dalsze kroki obejmowały analizę korelacji, gdzie zidentyfikowałyśmy wysoką zależność między wiekiem a długością historii kredytowej, co skutkowało usunięciem jednej ze zmiennych. Dane zostały następnie podzielone na zbiór treningowy i testowy (w proporcji 80:20) oraz odpowiednio przeskalowane dla modeli wrażliwych na skalę cech.
+
+Na tej podstawie przeprowadziłyśmy trening kilku modeli klasyfikacyjnych: **Regresji logistycznej (GLM)**, **Random Forest**, **SVM**, **Naive Bayes** oraz **XGBoost**. Najlepsze wyniki uzyskały modele: **Random Forest** oraz **XGBoost**, osiągając bardzo wysoką dokładność (Accuracy \> 93%), czułość (Recall \> 0.99) oraz F1-score (\~0.96), co świadczy o dużej skuteczności w detekcji niewypłacalnych klientów.
+
+Następnie zastosowałyśmy technikę **SMOTE**, w celu przeciwdziałania problemowi niezrównoważonych klas. Zbalansowanie danych poprawiło nieco *Specificity* (rozpoznawanie klientów wypłacalnych), ale obniżyło *Recall*, co było niepożądane przy głównym celu projektu – maksymalnej detekcji ryzykownych przypadków.
+
+Z tego względu za najlepszy model uznałyśmy **Random Forest bez SMOTE**, który osiągnął:
+
+-   **Accuracy:** 0.936
+
+-   **Recall (Sensitivity):** 0.994
+
+-   **F1-score:** 0.960
+
+-   **Precision:** 0.929
+
+-   **Specificity:** 0.727
+
+Model ten zapewnił **najlepszą równowagę między skutecznością a wykrywaniem ryzyka kredytowego**, co czyni go optymalnym rozwiązaniem w analizowanym problemie klasyfikacji klientów kredytowych.
